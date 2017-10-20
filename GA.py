@@ -4,30 +4,39 @@ Created on Sun Oct 15 08:37:53 2017
 
 @author: chauv
 """
+import os
 import glob
 import cv2
 import time
 import numpy as np
+import datetime
 import EE560Project as ee
 import matplotlib.pyplot as plt
 
 class GenAlg:
     
-    def __init__(self, Ngenes, Np, Pc, Pm, Re, numIter):
+    def __init__(self, Ngenes, Np, Pc, Pm, Re, Pv, numIter):
         self.Ngenes = Ngenes # Equals length of weight array
         self.Np = Np
         self.Pc = Pc
         self.Pm = Pm
         self.Re = Re
+        self.Pv = Pv
         self.numIter = numIter
         self.maxMAE = None
         
         self.fitnessArr = np.zeros(Np)
+        self.numElites = self.myRound(self.Re*self.Np, base=2)
+        self.lastGeneration = np.full((self.Np, self.Ngenes), np.nan)
         
-        # Create the population
-        self.createPopulation()
+        # Create the initial population
+        self.createInitialPopulation()
         
-    def createPopulation(self):
+    def myRound(self, x, base=2):
+        # Copied from https://stackoverflow.com/questions/2272149/round-to-5-or-other-number-in-python
+        return int(base * round(float(x)/base))
+        
+    def createInitialPopulation(self):
         self.population = np.zeros((self.Np, self.Ngenes))
         for i in range(self.Np):
             chromosome = np.random.rand(self.Ngenes)
@@ -44,17 +53,28 @@ class GenAlg:
         return parentsArr
         
     def createNextGeneration(self, parentsArr):
+        # Copy current generation into last generation
+        self.lastGeneration = np.copy(self.population)
+        # Perform elitism
+        self.population[:self.numElites] = self.performElitism()
+        # Permute the parents array
+        parentsArr = np.random.permutation(parentsArr)
         # Create children
-        for i in range(0, self.Np, 2):
+        for i in range(self.numElites, self.Np, 2):
             parent1, parent2 = parentsArr[i], parentsArr[i+1]
             if np.random.rand() < self.Pc:
                 self.population[i], self.population[i+1] = self.performCrossover(parent1, parent2)
             else:
                 self.population[i], self.population[i+1] = parent1, parent2
-        # Apply mutation
-        self.population[i] = self.performMutation(self.population[i])
-        self.population[i+1] = self.performMutation(self.population[i+1])
+            # Apply mutation
+            self.population[i] = self.performMutation(self.population[i])
+            self.population[i+1] = self.performMutation(self.population[i+1])
         return
+    
+    def performElitism(self):
+        # Use argsort with -1 times the fitness array to sort in descending order
+        sortIndex = np.argsort(-self.fitnessArr)
+        return self.lastGeneration[sortIndex[:self.numElites]]
     
     def performCrossover(self, parent1, parent2):
         if np.random.rand() < self.Pc:
@@ -75,10 +95,19 @@ class GenAlg:
         
     def calcFitness(self, origImg, filteredImg):
         if self.maxMAE == None:
-            self.maxMAE = np.mean(origImg)
-        MAE = np.mean(np.abs(filteredImg.astype(float) - origImg.astype(float)))
+            self.maxMAE = np.mean(origImg) * (self.Pv)
+        MAE = np.mean(np.abs(filteredImg.ravel().astype(float) - origImg.ravel().astype(float)))
         fitness = 1. - MAE / self.maxMAE
         return fitness
+    
+    def calcFitnesses(self, meanDiffs):
+        if self.maxMAE == None:
+            # Calculate the maximum possible error by assuming an error equal to
+            # the mean pixel value times the total probability of impulse divided
+            # by the number of channels
+            self.maxMAE = np.mean(origImg.ravel()) * (self.Pv)
+        self.fitnessArr = 1. - meanDiffs / self.maxMAE
+        return
         
 ##############################################################################
 if __name__ == '__main__':
@@ -92,7 +121,6 @@ if __name__ == '__main__':
     # Create training database
     folder = r'C:\Users\jchauvin\Dropbox (Physical Optics)\Grad School\EE 560\project'
     #folder = r'C:\Users\chauv\Dropbox (Physical Optics)\Grad School\EE 560\project'
-    outFolder = folder + '\\results'
     imageLoc = folder + '\images\*'
     imagePaths = glob.glob(imageLoc)
     IH.createTrainingDatabase(imagePaths)
@@ -100,12 +128,16 @@ if __name__ == '__main__':
     # Perform GA optimization
     weights = np.ones((3,3))
     Ngenes = len(weights.ravel())
-    Np = 30
+    Np = 100
     Pc = 0.70
     Pm = 0.05
     Re = 0.10
-    numIter = 7 
-    GA = GenAlg(Ngenes, Np, Pc, Pm, Re, numIter)
+    numIter = 40
+    GA = GenAlg(Ngenes, Np, Pc, Pm, Re, Pv, numIter)
+    
+    # Create output folder
+    outFolder = os.path.join(folder, 'results', datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')+'_Np_'+str(Np)+'_numIter_'+str(numIter))
+    os.makedirs(outFolder)
     
     # Use genetic algorithm to find global optimum
     origImg = IH.trainingDatabase[0][0]
@@ -113,39 +145,37 @@ if __name__ == '__main__':
     fitnessArr = np.zeros(Np)
     bestFitnessArr = np.zeros(numIter)
     
-    agents = 5
-    chunksize = 3
     startTime = time.clock()
     for k in range(numIter):
+        iterStartTime = time.clock()
         print('Iteration %d...' % k)
-        for i in range(Np):
-            print(GA.population[i,:])
-            filt = ee.WVDF(GA.population[i,:])
-            filteredImg = filt.applyFilterToImage(noisyImg)
-            GA.fitnessArr[i] = GA.calcFitness(origImg, filteredImg)
+        filt = ee.WVDF(GA.population)
+        filt.applyFiltersToImage(noisyImg, origImg)
+        GA.calcFitnesses(filt.meanDiffs)
+        iterEndTime = time.clock()
+        print('Iteration %d time: %.3f minutes' % (k, (iterEndTime-iterStartTime)/60.))
         parentsArr = GA.performTournamentSelection()
         GA.createNextGeneration(parentsArr)
         bestFitnessArr[k] = np.max(GA.fitnessArr)
     endTime = time.clock()
+    
+    # Calculate fitness for the starting noisy image
+    noisyImgFitness = GA.calcFitness(origImg, noisyImg)
         
     plt.figure(1)
     plt.plot(range(numIter), bestFitnessArr)
     plt.xlabel('Iterations')
     plt.ylabel('Best Fitness')
+    plt.show()
     plt.savefig(outFolder + '\\Np_'+str(Np)+'_numIter_'+str(numIter)+'_diffPerIter.png')
         
-    # Calculate fitnesses of final population to find optimal weights
-    print('Calculating optimal weights...')
-#    for i in range(Np):
-#        filt = ee.WVDF(GA.population[i,:])
-#        filteredImg = filt.applyFilterToImage(noisyImg)
-#        GA.fitnessArr[i] = GA.calcFitness(origImg, filteredImg)
-    optInd = np.where(GA.fitnessArr == np.max(GA.fitnessArr))[0][0]
-    bestWeights = GA.population[optInd,:]
-    print(bestWeights)
     # Create final filtered image
-    filt = ee.WVDF(bestWeights)
-    filteredImg = filt.applyFilterToImage(noisyImg)
+    print('Producing final filtered image...')
+    bestWeights = filt.weightArrays[list(filt.meanDiffs).index(min(filt.meanDiffs))]
+    filteredImg = filt.applyBestFilterToImage(noisyImg, bestWeights)
+    
+    # Calculate fitness for resulting image
+    filteredImgFitness = GA.calcFitness(origImg, filteredImg)
     
     # Plot results
     plt.figure(2)#, figsize=(100,100))
@@ -173,7 +203,10 @@ if __name__ == '__main__':
     plt.show()
     plt.savefig(outFolder + '\\Np_'+str(Np)+'_numIter_'+str(numIter)+'_results.png')
 
-    print('Difference: %.3f' % (np.mean(np.abs(origImg.astype(float)-filteredImg.astype(float)))))
+    print('Original Difference: %.3f' % (np.mean(np.abs(origImg.astype(float)-noisyImg.astype(float)))))
+    print('Filtered Difference: %.3f' % (np.mean(np.abs(origImg.astype(float)-filteredImg.astype(float)))))
+    print('Noisy image fitness: %.3f' % noisyImgFitness)
+    print('Filtered image fitness: %.3f' % filteredImgFitness)
     print('Total runtime: %.3f minutes' % ((endTime-startTime)/60.))
     
     
@@ -183,4 +216,6 @@ if __name__ == '__main__':
         f.write('Optimal weights:\n')
         f.write(str(bestWeights)+'\n')
         f.write('Difference: %.3f\n' % (np.mean(np.abs(origImg.astype(float)-filteredImg.astype(float)))))
+        f.write('Noisy image fitness: %.3f' % noisyImgFitness)
+        f.write('Filtered image fitness: %.3f' % filteredImgFitness)
         f.write('Total runtime: %.3f minutes\n' % ((endTime-startTime)/60.))
