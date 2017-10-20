@@ -73,12 +73,16 @@ class ImageHandler:
 ######################
 class WVDF:
     
-    def __init__(self, weights):
-        if len(np.array(weights).shape) == 1:
-            dim = int(np.sqrt(len(weights)))
-            self.weights = np.reshape(weights, (dim, dim))
+    def __init__(self, weightArrays):
+        if len(np.array(weightArrays[0]).shape) == 1:
+            dim = int(np.sqrt(len(weightArrays[0])))
+            num = len(weightArrays)
+            self.weightArrays = np.reshape(weightArrays, (num, dim, dim))
         else:
-            self.weights = weights
+            self.weightArrays = weightArrays
+        self.meanDiffs = np.zeros(len(self.weightArrays))
+        self.processingComplete = False
+        self.bestWeights = None
         
     def calcImageNorms(self, img):
         numRows, numCols, nChannels = img.shape
@@ -98,11 +102,9 @@ class WVDF:
         return abs(np.arccos(np.clip(np.dot(u1, u2), -1.0, 1.0)))
         #return np.abs(self.arccosApprox(np.dot(u1, u2)))
     
-    def findPixelValue(self, patch, patchNorms):
-        weights = self.weights
+    def findPixelValueAndCompareWithOrig(self, patch, patchNorms, origPixVal, totalPixelNum):
         nRows, nCols, nChannels = patch.shape
         patch1D = np.reshape(patch, (nRows*nCols, nChannels))
-        weights1D = weights.ravel()
         patchNorms1D = patchNorms.ravel()
         angleMatrix = np.zeros((len(patch1D), len(patch1D)))
         for i in range(len(patch1D)):
@@ -110,14 +112,20 @@ class WVDF:
             for j in range(i+1, len(patch1D)):
                 angleMatrix[i, j] = self.calcAngle(patch1D[i], patch1D[j], patchNorms1D[i], patchNorms1D[j])
                 angleMatrix[j, i] = angleMatrix[i, j]
-        # Calculate the betas
-        betaArr = np.dot(angleMatrix, weights1D)
-        # Find the pixel corresponding to the minimum beta value
-        ind = list(np.where(betaArr == np.min(betaArr))[0])[0]
-        pixVal = patch1D[ind]
-        return pixVal
+        # Loop over the weight arrays
+        for w in range(len(self.weightArrays[:,0])):
+            weights = self.weightArrays[w,:]
+            weights1D = weights.ravel()
+            # Calculate the betas
+            betaArr = np.dot(angleMatrix, weights1D)
+            # Find the pixel corresponding to the minimum beta value
+            ind = list(np.where(betaArr == np.min(betaArr))[0])[0]
+            pixVal = patch1D[ind]
+            # Calculate mean pixel difference by dividing by nRows*nCols*nChannels
+            self.meanDiffs[w] += np.mean(np.abs(np.array(pixVal).astype(float) - np.array(origPixVal).astype(float))) / float(totalPixelNum)
+        return
     
-    def applyFilterToImage(self, img):
+    def applyFiltersToImage(self, img, origImg):
         # Applies WVDF to input image to produce new, cleaned image
         #
         # Inputs:
@@ -125,7 +133,45 @@ class WVDF:
         # Outputs:
         #     filteredImg - cleaned image after filter operations
         ############################################################
-        weights = self.weights
+        numRows, numCols, nChannels = img.shape
+        totalPixelNum = numRows * numCols
+        borderLen = int((len(self.weightArrays[0]) - 1) / 2)
+        # Pad the input image to allow filtering of edge pixels
+        paddedImg = cv2.copyMakeBorder(img, borderLen, borderLen, 
+                                       borderLen, borderLen, 
+                                       cv2.BORDER_REFLECT)
+        imgNorms = self.calcImageNorms(paddedImg)
+        
+        # Loop over pixels in padded image
+        for row in range(borderLen, numRows+borderLen):
+            for col in range(borderLen, numCols+borderLen):
+                patch = paddedImg[(row-borderLen):(row+borderLen+1), (col-borderLen):(col+borderLen+1)]
+                patchNorms = imgNorms[(row-borderLen):(row+borderLen+1), (col-borderLen):(col+borderLen+1)]
+                self.findPixelValueAndCompareWithOrig(patch, patchNorms, origImg[row-borderLen, col-borderLen], totalPixelNum)
+        self.processingComplete = True
+        return
+    
+    def findPixelValue(self, patch, patchNorms, weights):
+        nRows, nCols, nChannels = patch.shape
+        patch1D = np.reshape(patch, (nRows*nCols, nChannels))
+        patchNorms1D = patchNorms.ravel()
+        angleMatrix = np.zeros((len(patch1D), len(patch1D)))
+        for i in range(len(patch1D)):
+            angleMatrix[i, i] = 0
+            for j in range(i+1, len(patch1D)):
+                angleMatrix[i, j] = self.calcAngle(patch1D[i], patch1D[j], patchNorms1D[i], patchNorms1D[j])
+                angleMatrix[j, i] = angleMatrix[i, j]
+         # Calculate the betas
+        betaArr = np.dot(angleMatrix, weights.ravel())
+        # Find the pixel corresponding to the minimum beta value
+        ind = list(np.where(betaArr == np.min(betaArr))[0])[0]
+        pixVal = patch1D[ind]
+        return pixVal
+    
+    def applyBestFilterToImage(self, img, weights):
+#        if not self.processingComplete:
+#            print('Cannot produce filteredImg. Need to process all weight vectors.')
+#            return
         numRows, numCols, nChannels = img.shape
         filteredImg = np.zeros((numRows, numCols, nChannels), np.uint8)
         borderLen = int((len(weights[0]) - 1) / 2)
@@ -138,12 +184,10 @@ class WVDF:
         # Loop over pixels in padded image
         for row in range(borderLen, numRows+borderLen):
             for col in range(borderLen, numCols+borderLen):
-#                if col == borderLen:
-#                    print('Row: %d' % (row-borderLen))
                 #Loop over pixels within window
                 patch = paddedImg[(row-borderLen):(row+borderLen+1), (col-borderLen):(col+borderLen+1)]
                 patchNorms = imgNorms[(row-borderLen):(row+borderLen+1), (col-borderLen):(col+borderLen+1)]
-                pixVal = self.findPixelValue(patch, patchNorms)
+                pixVal = self.findPixelValue(patch, patchNorms, weights)
                 # Update filtered image with resulting value
                 filteredImg[row-borderLen, col-borderLen] = pixVal
         return filteredImg
