@@ -24,6 +24,7 @@ class GenAlg:
         self.Pv = Pv
         self.numIter = numIter
         self.maxMAE = None
+        self.numBits = 10
         
         self.fitnessArr = np.zeros(Np)
         self.numElites = self.myRound(self.Re*self.Np, base=2)
@@ -35,6 +36,38 @@ class GenAlg:
     def myRound(self, x, base=2):
         # Copied from https://stackoverflow.com/questions/2272149/round-to-5-or-other-number-in-python
         return int(base * round(float(x)/base))
+    
+    def encode(self, realNum):
+        # Assuming real number accuracy of 10 bits
+        newNum = int(1000 * realNum)
+        binNum = bin(newNum)[2:].zfill(self.numBits)
+        return binNum
+    
+    def encodeGene(self, realGene):
+        # realGene is an array of real values
+        binGene = ''
+        for gene in realGene:
+            binNum = self.encode(gene)
+            binGene += binNum
+        return binGene
+    
+    def decode(self, binNum):
+        # Assuming real number accuracy of 10 bits
+        realNum = int(binNum, 2) * (1. / float(2^self.numBits))
+        return realNum
+    
+    def decodeChromosome(self, chromosome):
+        realChromosome = []
+        for i in range(0, self.Ngenes, self.numBits):
+            binGene = chromosome[i:i+self.numBits]
+            realGene = self.decode(binGene)
+            realChromosome.append(realGene)
+        return realChromosome
+    
+    def bitFlip(self, binNum, i):
+        bit = '1' if binNum[i] == '0' else '0'
+        newBin = binNum[2+i] + bit + binNum[i+1:] if i < len(binNum)-2 else binNum[2+i] + bit
+        return newBin
         
     def createInitialPopulation(self):
         self.population = np.zeros((self.Np, self.Ngenes))
@@ -119,14 +152,15 @@ if __name__ == '__main__':
     IH = ee.ImageHandler(Pv)
     
     # Create training database
-    folder = r'C:\Users\jchauvin\Dropbox (Physical Optics)\Grad School\EE 560\project'
-    #folder = r'C:\Users\chauv\Dropbox (Physical Optics)\Grad School\EE 560\project'
+    #folder = r'C:\Users\jchauvin\Dropbox (Physical Optics)\Grad School\EE 560\project'
+    folder = r'C:\Users\chauv\Dropbox (Physical Optics)\Grad School\EE 560\project'
     imageLoc = folder + '\images\*'
     imagePaths = glob.glob(imageLoc)
     IH.createTrainingDatabase(imagePaths)
     
     # Perform GA optimization
-    weights = np.ones((3,3))
+    nPatchRows, nPatchCols = (3,3)
+    weights = np.ones((nPatchRows, nPatchCols))
     Ngenes = len(weights.ravel())
     Np = 100
     Pc = 0.70
@@ -142,6 +176,7 @@ if __name__ == '__main__':
     # Use genetic algorithm to find global optimum
     origImg = IH.trainingDatabase[0][0]
     noisyImg = IH.trainingDatabase[0][1]
+    pixToPixAngles = IH.calculatePixelToPixelAngles(noisyImg, (nPatchRows, nPatchCols))
     fitnessArr = np.zeros(Np)
     bestFitnessArr = np.zeros(numIter)
     
@@ -150,7 +185,7 @@ if __name__ == '__main__':
         iterStartTime = time.clock()
         print('Iteration %d...' % k)
         filt = ee.WVDF(GA.population)
-        filt.applyFiltersToImage(noisyImg, origImg)
+        filt.applyFiltersAndCompareToOriginal(noisyImg, origImg, pixToPixAngles)
         GA.calcFitnesses(filt.meanDiffs)
         iterEndTime = time.clock()
         print('Iteration %d time: %.3f minutes' % (k, (iterEndTime-iterStartTime)/60.))
@@ -172,7 +207,7 @@ if __name__ == '__main__':
     # Create final filtered image
     print('Producing final filtered image...')
     bestWeights = filt.weightArrays[list(filt.meanDiffs).index(min(filt.meanDiffs))]
-    filteredImg = filt.applyBestFilterToImage(noisyImg, bestWeights)
+    filteredImg = filt.applyBestFilterToImage(noisyImg, bestWeights, pixToPixAngles)
     
     # Calculate fitness for resulting image
     filteredImgFitness = GA.calcFitness(origImg, filteredImg)
@@ -216,6 +251,6 @@ if __name__ == '__main__':
         f.write('Optimal weights:\n')
         f.write(str(bestWeights)+'\n')
         f.write('Difference: %.3f\n' % (np.mean(np.abs(origImg.astype(float)-filteredImg.astype(float)))))
-        f.write('Noisy image fitness: %.3f' % noisyImgFitness)
-        f.write('Filtered image fitness: %.3f' % filteredImgFitness)
+        f.write('Noisy image fitness: %.3f\n' % noisyImgFitness)
+        f.write('Filtered image fitness: %.3f\n' % filteredImgFitness)
         f.write('Total runtime: %.3f minutes\n' % ((endTime-startTime)/60.))
