@@ -138,37 +138,6 @@ class WVDF:
         self.meanDiffs = np.zeros(len(self.weightArrays))
         self.bestWeights = None
     
-#    def findPixelValueAndCompareWithOrig(self, patch, patchNorms, origPixVal, totalPixelNum, angleIndex):
-#        nRows, nCols, nChannels = patch.shape
-#        patch1D = np.reshape(patch, (nRows*nCols, nChannels))
-#        patchNorms1D = patchNorms.ravel()
-#        angleMatrix = np.zeros((len(patch1D), len(patch1D)))
-#        if len(self.pixToPixAngles) == 0:
-#            self.pixToPixAngles = np.full(totalPixelNum * len(patch1D)**2, np.nan)           
-#
-#        if not self.areAnglesCalculated:
-#            for i in range(len(patch1D)):
-#                angleMatrix[i, i] = 0
-#                for j in range(i+1, len(patch1D)):
-#                    angleMatrix[i, j] = self.calcAngle(patch1D[i], patch1D[j], patchNorms1D[i], patchNorms1D[j])
-#                    angleMatrix[j, i] = angleMatrix[i, j]
-#            self.pixToPixAngles[angleIndex:angleIndex+len(patch1D)**2] = angleMatrix.ravel()
-#        else:
-#            angleMatrix = np.reshape(self.pixToPixAngles[angleIndex:angleIndex+len(patch1D)**2], (nRows, nCols))
-#                
-#        # Loop over the weight arrays
-#        for w in range(len(self.weightArrays[:,0])):
-#            weights = self.weightArrays[w,:]
-#            weights1D = weights.ravel()
-#            # Calculate the betas
-#            betaArr = np.dot(angleMatrix, weights1D)
-#            # Find the pixel corresponding to the minimum beta value
-#            ind = list(np.where(betaArr == np.min(betaArr))[0])[0]
-#            pixVal = patch1D[ind]
-#            # Calculate mean pixel difference by dividing by nRows*nCols*nChannels
-#            self.meanDiffs[w] += np.mean(np.abs(np.array(pixVal).astype(float) - np.array(origPixVal).astype(float))) / float(totalPixelNum)
-#        return
-    
     def applyFiltersAndCompareToOriginal(self, noisyImg, origImg, pixToPixAngles):
         numImgRows, numImgCols, nChannels = noisyImg.shape
         nPatchRows, nPatchCols = self.weightArrays[0].shape
@@ -201,45 +170,6 @@ class WVDF:
                 # Update angle index
                 angleIndex += (nPatchRows * nPatchCols)**2
         return
-    
-#    def applyFiltersToImage(self, img, origImg, pixToPixAngles):
-#        # Applies WVDF to input image to produce new, cleaned image
-#        #
-#        # Inputs:
-#        #     img - noisy input image
-#        # Outputs:
-#        #     filteredImg - cleaned image after filter operations
-#        ############################################################
-#        numRows, numCols, nChannels = img.shape
-#        totalPixelNum = numRows * numCols
-#        borderLen = int((len(self.weightArrays[0]) - 1) / 2)
-#        # Pad the input image to allow filtering of edge pixels
-#        paddedImg = cv2.copyMakeBorder(img, borderLen, borderLen, 
-#                                       borderLen, borderLen, 
-#                                       cv2.BORDER_REFLECT)
-#        imgNorms = self.calcImageNorms(paddedImg)
-#        
-#        # Loop over pixels in padded image
-#        angleIndex = 0
-#        for row in range(borderLen, numRows+borderLen):
-#            for col in range(borderLen, numCols+borderLen):
-#                patch = paddedImg[(row-borderLen):(row+borderLen+1), (col-borderLen):(col+borderLen+1)]
-#                patchNorms = imgNorms[(row-borderLen):(row+borderLen+1), (col-borderLen):(col+borderLen+1)]
-#                self.findPixelValueAndCompareWithOrig(patch, patchNorms, origImg[row-borderLen, col-borderLen], 
-#                                                      totalPixelNum, angleIndex)
-#                angleIndex += (patch.shape[0] * patch.shape[1])**2
-#        self.areAnglesCalculated = True
-#        return
-    
-#    def findPixelValue(self, patch, weights, angleMatrix):
-#        nRows, nCols, nChannels = patch.shape
-#        patch1D = np.reshape(patch, (nRows*nCols, nChannels))
-#        # Calculate the betas
-#        betaArr = np.dot(angleMatrix, weights.ravel())
-#        # Find the pixel corresponding to the minimum beta value
-#        ind = list(np.where(betaArr == np.min(betaArr))[0])[0]
-#        pixVal = patch1D[ind]
-#        return pixVal
     
     def applyBestFilterToImage(self, img, weights, pixToPixAngles):
         numPatchRows, numPatchCols = weights.shape
